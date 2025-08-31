@@ -1,0 +1,327 @@
+# AI Crop Disease Detection System - Phase 1 (30%)
+
+import pandas as pd
+import numpy as np
+import cv2
+import os
+import requests
+import json
+from pathlib import Path
+import tensorflow as tf
+from tensorflow.keras.applications import EfficientNetB0
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+import matplotlib.pyplot as plt
+from PIL import Image
+import warnings
+warnings.filterwarnings('ignore')
+
+
+# ------------------------------
+# Core Crop Disease Detection Class
+# ------------------------------
+class CropDiseaseDetector:
+    def __init__(self, dataset_path='crop_disease_dataset.csv', model_path='models/'):
+        """
+        Initialize the Crop Disease Detection System
+        """
+        self.dataset_path = dataset_path
+        self.model_path = Path(model_path)
+        self.model_path.mkdir(exist_ok=True)
+
+        # Image preprocessing parameters
+        self.img_size = (224, 224)
+        self.batch_size = 32
+
+        # Model components
+        self.model = None
+        self.label_encoder = LabelEncoder()
+
+        # Disease remedies database
+        self.remedies_db = self._init_remedies_database()
+
+        print("Crop Disease Detection System Initialized!")
+
+    def _init_remedies_database(self):
+        """Initialize database of organic remedies for common crop diseases"""
+        return {
+            'Apple___Apple_scab': {
+                'organic_remedies': [
+                    'Apply neem oil spray during early morning or evening',
+                    'Use baking soda solution (1 tsp per quart water)',
+                    'Remove fallen leaves and improve air circulation',
+                    'Apply copper fungicide (organic approved)'
+                ],
+                'prevention': 'Plant resistant varieties, ensure proper spacing',
+                'severity': 'Moderate'
+            },
+            'Apple___Black_rot': {
+                'organic_remedies': [
+                    'Prune infected branches immediately',
+                    'Apply copper sulfate spray',
+                    'Use compost tea foliar spray',
+                    'Improve drainage around trees'
+                ],
+                'prevention': 'Remove mummified fruits, proper pruning',
+                'severity': 'High'
+            },
+            'Tomato___Late_blight': {
+                'organic_remedies': [
+                    'Apply copper-based fungicide',
+                    'Use milk spray (1:10 ratio with water)',
+                    'Improve air circulation between plants',
+                    'Remove affected foliage immediately'
+                ],
+                'prevention': 'Avoid overhead watering, plant resistant varieties',
+                'severity': 'Very High'
+            },
+            'Tomato___Early_blight': {
+                'organic_remedies': [
+                    'Neem oil application weekly',
+                    'Baking soda and soap spray',
+                    'Mulch to prevent soil splash',
+                    'Remove lower leaves touching ground'
+                ],
+                'prevention': 'Crop rotation, proper spacing',
+                'severity': 'Moderate'
+            },
+            'Potato___Late_blight': {
+                'organic_remedies': [
+                    'Copper fungicide spray',
+                    'Destroy infected plants',
+                    'Improve field drainage',
+                    'Use resistant potato varieties'
+                ],
+                'prevention': 'Avoid wet conditions, proper storage',
+                'severity': 'Very High'
+            },
+            'Corn___Northern_Leaf_Blight': {
+                'organic_remedies': [
+                    'Apply compost tea spray',
+                    'Use trichoderma-based biofungicide',
+                    'Ensure proper plant spacing',
+                    'Remove crop residues after harvest'
+                ],
+                'prevention': 'Crop rotation, resistant hybrids',
+                'severity': 'Moderate'
+            }
+        }
+
+    def create_sample_dataset(self):
+        """Create a sample CSV dataset for crop disease detection"""
+        print("Creating sample dataset...")
+
+        diseases = [
+            'Apple___Apple_scab', 'Apple___Black_rot', 'Apple___Cedar_apple_rust', 'Apple___healthy',
+            'Tomato___Late_blight', 'Tomato___Early_blight', 'Tomato___Septoria_leaf_spot', 'Tomato___healthy',
+            'Potato___Late_blight', 'Potato___Early_blight', 'Potato___healthy',
+            'Corn___Northern_Leaf_Blight', 'Corn___Gray_leaf_spot', 'Corn___healthy'
+        ]
+
+        np.random.seed(42)
+        n_samples = 1000
+        data = []
+        for i in range(n_samples):
+            disease = np.random.choice(diseases)
+            crop, condition = disease.split('___')
+            data.append({
+                'image_id': f'img_{i+1:04d}',
+                'image_path': f'images/{crop.lower()}/{condition}/{i+1:04d}.jpg',
+                'crop_type': crop,
+                'disease_condition': condition,
+                'disease_full_name': disease,
+                'confidence_score': np.random.uniform(0.85, 0.99),
+                'image_width': np.random.choice([224, 256, 512]),
+                'image_height': np.random.choice([224, 256, 512]),
+                'capture_date': pd.date_range('2023-01-01', '2024-12-31', periods=n_samples)[i],
+                'location': np.random.choice(['Farm_A', 'Farm_B', 'Farm_C', 'Lab_Setup']),
+                'weather_condition': np.random.choice(['Sunny', 'Cloudy', 'Humid', 'Rainy']),
+                'severity_level': np.random.choice(['Low', 'Medium', 'High', 'Critical']) if 'healthy' not in condition else 'None'
+            })
+
+        df = pd.DataFrame(data)
+        df.to_csv(self.dataset_path, index=False)
+
+        print(f"Sample dataset created: {self.dataset_path}")
+        print(f"Dataset shape: {df.shape}")
+        print(f"Disease classes: {df['disease_full_name'].nunique()}")
+        return df
+
+    def load_and_analyze_dataset(self):
+        """Load CSV dataset and perform exploratory data analysis"""
+        print("📂 Loading dataset...")
+        try:
+            self.df = pd.read_csv(self.dataset_path)
+        except FileNotFoundError:
+            print("⚠️ Dataset not found. Creating sample dataset...")
+            self.df = self.create_sample_dataset()
+
+        print("\n Dataset Analysis:")
+        print(f"Total samples: {len(self.df)}")
+        print(f"Number of crops: {self.df['crop_type'].nunique()}")
+        print(f"Number of disease classes: {self.df['disease_full_name'].nunique()}")
+
+        print("\n Disease Distribution:")
+        print(self.df['disease_full_name'].value_counts().head(10))
+
+        print("\n🌾 Crop Type Distribution:")
+        print(self.df['crop_type'].value_counts())
+
+        return self.df
+
+    def preprocess_data(self):
+        """Prepare data for model training"""
+        print("Preprocessing data...")
+        self.df['encoded_label'] = self.label_encoder.fit_transform(self.df['disease_full_name'])
+        self.num_classes = len(self.label_encoder.classes_)
+
+        print(f"Label encoding completed. Classes: {self.num_classes}")
+        for i, class_name in enumerate(self.label_encoder.classes_):
+            print(f"  {i}: {class_name}")
+
+        train_df, test_df = train_test_split(
+            self.df, test_size=0.2,
+            stratify=self.df['encoded_label'], random_state=42
+        )
+        val_df, test_df = train_test_split(
+            test_df, test_size=0.5,
+            stratify=test_df['encoded_label'], random_state=42
+        )
+        print(f"Data split - Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)}")
+        return train_df, val_df, test_df
+
+    def build_model(self):
+        """Build CNN model using EfficientNet as base"""
+        print("Building AI model...")
+        try:
+            base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(*self.img_size, 3))
+        except Exception as e:
+            print(f"⚠️ Could not load ImageNet weights ({e}). Using random init.")
+            base_model = EfficientNetB0(weights=None, include_top=False, input_shape=(*self.img_size, 3))
+
+        base_model.trainable = False
+        x = GlobalAveragePooling2D()(base_model.output)
+        x = Dropout(0.3)(x)
+        x = Dense(512, activation='relu')(x)
+        x = Dropout(0.3)(x)
+        predictions = Dense(self.num_classes, activation='softmax')(x)
+
+        self.model = Model(inputs=base_model.input, outputs=predictions)
+        self.model.compile(optimizer=Adam(learning_rate=0.001),
+                           loss='sparse_categorical_crossentropy',
+                           metrics=['accuracy'])
+        print("Model built successfully!")
+        print(f"Model parameters: {self.model.count_params():,}")
+        return self.model
+
+    def get_disease_info(self, disease_name):
+        """Get detailed information and remedies for detected disease"""
+        return self.remedies_db.get(disease_name, {
+            'organic_remedies': ['Consult local agricultural extension office'],
+            'prevention': 'Follow general crop health practices',
+            'severity': 'Unknown'
+        })
+
+    def predict_disease(self, image_path):
+        """Placeholder prediction"""
+        print(f"🔍 Analyzing image: {image_path}")
+        predicted_disease = "Tomato___Late_blight"
+        confidence = 0.94
+        disease_info = self.get_disease_info(predicted_disease)
+        return {
+            'predicted_disease': predicted_disease,
+            'confidence': confidence,
+            'crop_type': predicted_disease.split('___')[0],
+            'condition': predicted_disease.split('___')[1],
+            'remedies': disease_info
+        }
+
+    def display_prediction_results(self, results):
+        """Display prediction results nicely"""
+        print("\n" + "="*50)
+        print("DISEASE DETECTION RESULTS")
+        print("="*50)
+        print(f"Crop: {results['crop_type']}")
+        print(f"Condition: {results['condition']}")
+        print(f"Confidence: {results['confidence']:.2%}")
+        if results['condition'] != 'healthy':
+            print("\n ORGANIC REMEDIES:")
+            for i, remedy in enumerate(results['remedies']['organic_remedies'], 1):
+                print(f"   {i}. {remedy}")
+            print(f"\n Prevention: {results['remedies']['prevention']}")
+            print(f" Severity: {results['remedies']['severity']}")
+        else:
+            print("\n Plant appears healthy! Continue regular care.")
+        print("="*50)
+
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+def load_and_preprocess_image(image_path, target_size=(224, 224)):
+    """Load and preprocess image for model prediction"""
+    try:
+        image = cv2.imread(image_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = cv2.resize(image, target_size)
+        image = image.astype('float32') / 255.0
+        image = np.expand_dims(image, axis=0)
+        return image
+    except Exception as e:
+        print(f"Error loading image: {e}")
+        return None
+
+def visualize_dataset_distribution(df):
+    """Create visualizations for dataset analysis"""
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    fig.suptitle('Crop Disease Dataset Analysis', fontsize=16)
+
+    disease_counts = df['disease_full_name'].value_counts()
+    axes[0, 0].pie(disease_counts.values, labels=disease_counts.index, autopct='%1.1f%%')
+    axes[0, 0].set_title('Disease Distribution')
+
+    crop_counts = df['crop_type'].value_counts()
+    axes[0, 1].bar(crop_counts.index, crop_counts.values)
+    axes[0, 1].set_title('Crop Type Distribution')
+    axes[0, 1].tick_params(axis='x', rotation=45)
+
+    severity_counts = df['severity_level'].value_counts()
+    axes[1, 0].bar(severity_counts.index, severity_counts.values, color='orange')
+    axes[1, 0].set_title('Disease Severity Distribution')
+
+    axes[1, 1].hist(df['confidence_score'], bins=20, color='green', alpha=0.7)
+    axes[1, 1].set_title('Confidence Score Distribution')
+    axes[1, 1].set_xlabel('Confidence Score')
+    axes[1, 1].set_ylabel('Frequency')
+
+    plt.tight_layout()
+    plt.show()
+
+
+# ------------------------------
+# Main Execution
+# ------------------------------
+def main():
+    print("Starting Crop Disease Detection System...")
+    detector = CropDiseaseDetector()
+    df = detector.load_and_analyze_dataset()
+    train_df, val_df, test_df = detector.preprocess_data()
+    model = detector.build_model()
+    print("\n Model Architecture:")
+    model.summary()
+    try:
+        visualize_dataset_distribution(df)
+    except Exception as e:
+        print(f"Visualization skipped: {e}")
+    print("\n Example Prediction:")
+    sample_result = detector.predict_disease("sample_leaf_image.jpg")
+    detector.display_prediction_results(sample_result)
+    print("\n Initial setup completed!")
+
+
+# Run in Jupyter
+main()
