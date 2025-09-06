@@ -1,0 +1,267 @@
+# Phase 2 & 3: Image Processing and Model Training
+import os
+import numpy as np
+import pandas as pd
+import cv2
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+import matplotlib.pyplot as plt
+
+class CropDiseaseModel:
+    def __init__(self, dataset_path='crop_disease_dataset.csv'):
+        self.dataset_path = dataset_path
+        self.img_size = (128, 128)  # Smaller size for faster training
+        self.model = None
+        self.label_encoder = LabelEncoder()
+        
+    def load_dataset(self):
+        """Load the dataset created in Phase 1"""
+        try:
+            self.df = pd.read_csv(self.dataset_path)
+            print(f"Dataset loaded with {len(self.df)} samples")
+            return True
+        except:
+            print("Dataset not found. Please run Phase 1 first.")
+            return False
+    
+    def create_image_data(self, num_samples=100):
+        """
+        Create dummy image files for demonstration
+        In a real application, you would use actual images
+        """
+        os.makedirs('images', exist_ok=True)
+        
+        # Create sample images for each disease class
+        diseases = self.df['disease_full_name'].unique()
+        
+        for disease in diseases:
+            disease_dir = f"images/{disease.replace('___', '/')}"
+            os.makedirs(disease_dir, exist_ok=True)
+            
+            # Create some sample images
+            for i in range(min(5, num_samples)):
+                # Create a simple colored image
+                img = np.zeros((self.img_size[0], self.img_size[1], 3), dtype=np.uint8)
+                
+                # Different colors for different diseases
+                if 'healthy' in disease:
+                    img[:, :] = [0, 128, 0]  # Green for healthy
+                else:
+                    # Add some "disease" patterns
+                    img[:, :] = [128, 128, 0]  # Yellowish
+                    cv2.circle(img, 
+                              (np.random.randint(30, 100), np.random.randint(30, 100)), 
+                              np.random.randint(5, 20), 
+                              [0, 0, 255], -1)  # Red circles
+                
+                # Save image
+                img_path = f"{disease_dir}/sample_{i}.jpg"
+                cv2.imwrite(img_path, img)
+                
+                # Update dataframe with actual image path
+                self.df.loc[self.df['disease_full_name'] == disease, 'image_path'] = img_path
+        
+        print("Sample images created for demonstration")
+    
+    def load_and_preprocess_images(self):
+        """Load and preprocess images for training"""
+        images = []
+        labels = []
+        
+        print("Loading and preprocessing images...")
+        
+        for idx, row in self.df.iterrows():
+            try:
+                # Load image
+                img = cv2.imread(row['image_path'])
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                
+                # Resize
+                img = cv2.resize(img, self.img_size)
+                
+                # Normalize
+                img = img / 255.0
+                
+                images.append(img)
+                labels.append(row['disease_full_name'])
+            except:
+                print(f"Could not load image: {row['image_path']}")
+                continue
+        
+        # Convert to arrays
+        self.X = np.array(images)
+        self.y = self.label_encoder.fit_transform(labels)
+        
+        print(f"Loaded {len(self.X)} images with {len(np.unique(self.y))} classes")
+    
+    def build_model(self):
+        """Build a simpler CNN model for training"""
+        self.model = Sequential([
+            Conv2D(32, (3, 3), activation='relu', input_shape=(self.img_size[0], self.img_size[1], 3)),
+            MaxPooling2D(2, 2),
+            
+            Conv2D(64, (3, 3), activation='relu'),
+            MaxPooling2D(2, 2),
+            
+            Conv2D(128, (3, 3), activation='relu'),
+            MaxPooling2D(2, 2),
+            
+            Flatten(),
+            Dense(128, activation='relu'),
+            Dropout(0.5),
+            Dense(len(np.unique(self.y)), activation='softmax')
+        ])
+        
+        self.model.compile(
+            optimizer='adam',
+            loss='sparse_categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        
+        print("Model built successfully!")
+        self.model.summary()
+    
+    def train_model(self, epochs=10):
+        """Train the model with data augmentation"""
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(
+            self.X, self.y, test_size=0.2, random_state=42
+        )
+        
+        # Data augmentation
+        datagen = ImageDataGenerator(
+            rotation_range=20,
+            width_shift_range=0.2,
+            height_shift_range=0.2,
+            horizontal_flip=True,
+            zoom_range=0.2
+        )
+        
+        # Train the model
+        print("Training model...")
+        history = self.model.fit(
+            datagen.flow(X_train, y_train, batch_size=32),
+            epochs=epochs,
+            validation_data=(X_test, y_test),
+            verbose=1
+        )
+        
+        # Save model
+        self.model.save('crop_disease_model.h5')
+        print("Model saved as crop_disease_model.h5")
+        
+        return history
+    
+    def plot_training_history(self, history):
+        """Plot training history"""
+        plt.figure(figsize=(12, 4))
+        
+        plt.subplot(1, 2, 1)
+        plt.plot(history.history['accuracy'], label='Training Accuracy')
+        plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+        plt.title('Model Accuracy')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy')
+        plt.legend()
+        
+        plt.subplot(1, 2, 2)
+        plt.plot(history.history['loss'], label='Training Loss')
+        plt.plot(history.history['val_loss'], label='Validation Loss')
+        plt.title('Model Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.savefig('training_history.png')
+        plt.show()
+    
+    def predict_disease(self, image_path):
+        """Predict disease from an image"""
+        if self.model is None:
+            print("Please train the model first!")
+            return None
+        
+        # Load and preprocess image
+        img = cv2.imread(image_path)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = cv2.resize(img, self.img_size)
+        img = img / 255.0
+        img = np.expand_dims(img, axis=0)
+        
+        # Make prediction
+        prediction = self.model.predict(img)
+        class_idx = np.argmax(prediction)
+        confidence = np.max(prediction)
+        
+        # Get class name
+        class_name = self.label_encoder.inverse_transform([class_idx])[0]
+        
+        return {
+            'disease': class_name,
+            'confidence': float(confidence),
+            'crop': class_name.split('___')[0],
+            'condition': class_name.split('___')[1]
+        }
+
+# Main execution for Phase 2 & 3
+def main():
+    print("🌱 Crop Disease Detection - Phase 2 & 3")
+    print("Image Processing and Model Training")
+    print("=" * 50)
+    
+    # Initialize model
+    disease_model = CropDiseaseModel()
+    
+    # Load dataset
+    if not disease_model.load_dataset():
+        return
+    
+    # Create sample images (in real application, use actual images)
+    disease_model.create_image_data()
+    
+    # Load and preprocess images
+    disease_model.load_and_preprocess_images()
+    
+    # Build model
+    disease_model.build_model()
+    
+    # Train model
+    history = disease_model.train_model(epochs=10)
+    
+    # Plot training history
+    disease_model.plot_training_history(history)
+    
+    # Test prediction
+    print("\n🧪 Testing prediction...")
+    
+    # Find a sample image to test
+    sample_image = None
+    for disease in disease_model.df['disease_full_name'].unique():
+        disease_dir = f"images/{disease.replace('___', '/')}"
+        if os.path.exists(disease_dir) and len(os.listdir(disease_dir)) > 0:
+            sample_image = f"{disease_dir}/sample_0.jpg"
+            break
+    
+    if sample_image and os.path.exists(sample_image):
+        prediction = disease_model.predict_disease(sample_image)
+        print(f"Prediction for {sample_image}:")
+        print(f"  Disease: {prediction['disease']}")
+        print(f"  Confidence: {prediction['confidence']:.2%}")
+        print(f"  Crop: {prediction['crop']}")
+        print(f"  Condition: {prediction['condition']}")
+    else:
+        print("No sample image found for testing")
+    
+    print("\n✅ Phase 2 & 3 completed!")
+    print("Next steps:")
+    print("1. Replace sample images with real crop disease images")
+    print("2. Train with more epochs and larger dataset")
+    print("3. Develop a simple web interface")
+
+if __name__ == "__main__":
+    main()
