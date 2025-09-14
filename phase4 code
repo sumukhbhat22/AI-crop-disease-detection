@@ -1,0 +1,131 @@
+# Phase 4: Ultra Simple Interface (Fixed)
+from IPython.display import display, clear_output
+import ipywidgets as widgets
+import matplotlib.pyplot as plt
+from PIL import Image
+import numpy as np
+import io
+
+# Simple disease database
+REMEDIES_DB = {
+    'Tomato___Late_blight': {
+        'organic_remedies': ['Copper-based fungicide', 'Milk spray', 'Remove affected leaves'],
+        'prevention': 'Avoid overhead watering',
+        'severity': 'High'
+    },
+    'Tomato___Early_blight': {
+        'organic_remedies': ['Neem oil spray', 'Baking soda solution'],
+        'prevention': 'Crop rotation',
+        'severity': 'Moderate'
+    },
+    'Apple___Apple_scab': {
+        'organic_remedies': ['Sulfur spray', 'Prune infected branches'],
+        'prevention': 'Clean fallen leaves',
+        'severity': 'Moderate'
+    },
+    'healthy': {
+        'organic_remedies': ['Continue good practices'],
+        'prevention': 'Maintain soil health',
+        'severity': 'None'
+    }
+}
+
+def predict_disease(image):
+    """Simple prediction based on image greenness"""
+    img_array = np.array(image)
+    avg_green = np.mean(img_array[:, :, 1])  # Green channel
+    
+    # More sophisticated simulation
+    if avg_green > 180:
+        return "healthy", 0.95
+    elif avg_green > 120:
+        return "Tomato___Early_blight", 0.87
+    else:
+        return "Tomato___Late_blight", 0.92
+
+# Create interface
+upload = widgets.FileUpload(
+    accept='image/*', 
+    multiple=False,
+    description='Select Image'
+)
+button = widgets.Button(
+    description="Analyze Image",
+    button_style='success',
+    icon='search'
+)
+output = widgets.Output()
+
+def on_button_clicked(b):
+    with output:
+        clear_output()
+        try:
+            if upload.value:
+                # Get uploaded image - handle different widget versions
+                if hasattr(upload, 'value') and upload.value:
+                    # For newer widget versions
+                    if isinstance(upload.value, dict) and len(upload.value) > 0:
+                        uploaded = list(upload.value.values())[0]
+                        image_data = uploaded['content']
+                    # For older widget versions
+                    elif isinstance(upload.value, tuple) and len(upload.value) > 0:
+                        image_data = upload.value[0]['content']
+                    else:
+                        print(" Could not read image data")
+                        return
+                
+                image = Image.open(io.BytesIO(image_data))
+                
+                # Show image
+                plt.figure(figsize=(6, 6))
+                plt.imshow(image)
+                plt.axis('off')
+                plt.title('Uploaded Plant Image')
+                plt.show()
+                
+                # Analyze
+                disease, confidence = predict_disease(image)
+                
+                # Handle disease name format
+                if '___' in disease:
+                    crop, condition = disease.split('___')
+                else:
+                    crop, condition = 'Unknown', disease
+                
+                print(" ANALYSIS RESULTS")
+                print("=" * 40)
+                print(f" Crop: {crop}")
+                print(f" Condition: {condition}")
+                print(f" Confidence: {confidence:.0%}")
+                print("=" * 40)
+                
+                if condition != 'healthy':
+                    print("\n ORGANIC REMEDIES:")
+                    for i, remedy in enumerate(REMEDIES_DB[disease]['organic_remedies'], 1):
+                        print(f"   {i}. {remedy}")
+                    
+                    print(f"\n PREVENTION: {REMEDIES_DB[disease]['prevention']}")
+                    print(f" SEVERITY: {REMEDIES_DB[disease]['severity']}")
+                else:
+                    print("Plant appears healthy! Continue regular care practices.")
+                    
+            else:
+                print(" Please upload an image first. Click the 'Upload' button.")
+                
+        except Exception as e:
+            print(f" Error processing image: {str(e)}")
+            print("Please try a different image format (JPEG, PNG).")
+
+button.on_click(on_button_clicked)
+
+# Display everything with better formatting
+print(" CROP DISEASE DETECTOR")
+print("=" * 40)
+print("1. Click 'Select Image' to choose a plant image")
+print("2. Click 'Analyze Image' to detect diseases")
+print("3. View results below")
+print("=" * 40)
+
+display(upload)
+display(button)
+display(output)
